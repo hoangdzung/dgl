@@ -399,26 +399,28 @@ def run(args, device, data):
 
     # evaluate the embedding using LogisticRegression
     if args.standalone:
-        pred = generate_emb(model,g, g.ndata['features'], args.batch_size_eval, device)
+        pred = generate_emb(model,g, g.ndata['feat'], args.batch_size_eval, device)
     else:
-        pred = generate_emb(model.module, g, g.ndata['features'], args.batch_size_eval, device)
+        pred = generate_emb(model.module, g, g.ndata['feat'], args.batch_size_eval, device)
     if g.rank() == 0:
-        eval_acc, test_acc = compute_acc(pred, labels, global_train_nid, global_valid_nid, global_test_nid)
-        print('eval acc {:.4f}; test acc {:.4f}'.format(eval_acc, test_acc))
-
-    # sync for eval and test
+        if not args.eval:
+            if args.out_npz is not None:
+                pred = pred[np.arange(labels.shape[0])].cpu().numpy()
+                labels = labels.cpu().numpy()
+                if global_train_nid is not None:
+                    global_train_nid = global_train_nid.cpu().numpy()
+                    global_val_nid = global_valid_nid.cpu().numpy()
+                    global_test_nid = global_test_nid.cpu().numpy()
+                    np.savez(args.out_npz, emb=pred, train_ids=global_train_nid, val_ids=global_val_nid, test_ids=global_test_nid,labels=labels)
+                else:
+                    np.savez(args.out_npz, emb=pred,labels=labels)
+        else:
+            eval_acc, test_acc = compute_acc(pred, labels, global_train_nid, global_valid_nid, global_test_nid, g.rank())
+            print('eval acc {:.4f}; test acc {:.4f}'.format(eval_acc, test_acc))
+        print("training time: ", time.time()-stime)
     if not args.standalone:
         th.distributed.barrier()
-
-    if not args.standalone:
         g._client.barrier()
-
-        # save features into file
-        if g.rank() == 0:
-            th.save(pred, 'emb.pt')
-    else:
-        feat = g.ndata['features']
-        th.save(pred, 'emb.pt')
 
 def main(args):
     dgl.distributed.initialize(args.ip_config)
@@ -464,6 +466,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GCN')
     register_data_args(parser)
     parser.add_argument('--graph_name', type=str, help='graph name')
+    parser.add_argument('--out_npz', type=str, help='save file')
     parser.add_argument('--id', type=int, help='the partition id')
     parser.add_argument('--ip_config', type=str, help='The file for IP configuration')
     parser.add_argument('--part_config', type=str, help='The path to the partition config file')
@@ -476,7 +479,7 @@ if __name__ == '__main__':
     parser.add_argument('--num-layers', type=int, default=2)
     parser.add_argument('--fan_out', type=str, default='10,25')
     parser.add_argument('--batch_size', type=int, default=1000)
-    parser.add_argument('--batch_size_eval', type=int, default=100000)
+    parser.add_argument('--batch_size_eval', type=int, default=1000)
     parser.add_argument('--log_every', type=int, default=20)
     parser.add_argument('--eval_every', type=int, default=5)
     parser.add_argument('--lr', type=float, default=0.003)
