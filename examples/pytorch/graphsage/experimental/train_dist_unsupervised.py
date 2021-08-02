@@ -428,12 +428,21 @@ def main(args):
     print('rank:', g.rank())
     print('number of edges', g.number_of_edges())
 
-    train_eids = dgl.distributed.edge_split(th.ones((g.number_of_edges(),), dtype=th.bool), g.get_partition_book(), force_even=True)
-    train_nids = dgl.distributed.node_split(th.ones((g.number_of_nodes(),), dtype=th.bool), g.get_partition_book())
     global_train_nid = th.LongTensor(np.nonzero(g.ndata['train_mask'][np.arange(g.number_of_nodes())]))
     global_valid_nid = th.LongTensor(np.nonzero(g.ndata['val_mask'][np.arange(g.number_of_nodes())]))
     global_test_nid = th.LongTensor(np.nonzero(g.ndata['test_mask'][np.arange(g.number_of_nodes())]))
     labels = g.ndata['labels'][np.arange(g.number_of_nodes())]
+    if args.train_label_only:
+        train_nids = dgl.distributed.node_split(g.ndata['train_mask'], g.get_partition_book(), force_even=True)
+        srcs, dsts = g.find_edges(np.arange(g.number_of_edges()))
+        train_edges = (g.ndata['train_mask'][srcs] + g.ndata['train_mask'][dsts])
+        train_eids = dgl.distributed.edge_split(train_edges.type(th.bool), g.get_partition_book(), force_even=True)
+        train_edges[train_edges>=1] = 1.0
+        print(train_edges.sum())
+    else:
+        train_nids = dgl.distributed.node_split(th.ones((g.number_of_nodes(),), dtype=th.bool), g.get_partition_book())
+        train_eids = dgl.distributed.edge_split(th.ones((g.number_of_edges(),), dtype=th.bool), g.get_partition_book(), force_even=True)
+
     if args.num_gpus == -1:
         device = th.device('cpu')
     else:
@@ -459,6 +468,7 @@ if __name__ == '__main__':
     parser.add_argument('--ip_config', type=str, help='The file for IP configuration')
     parser.add_argument('--part_config', type=str, help='The path to the partition config file')
     parser.add_argument('--n_classes', type=int, help='the number of classes')
+    parser.add_argument('--train_label_only', default=False, action='store_true')
     parser.add_argument('--num_gpus', type=int, default=-1, 
                         help="the number of GPU device. Use -1 for CPU training")
     parser.add_argument('--num_epochs', type=int, default=20)
