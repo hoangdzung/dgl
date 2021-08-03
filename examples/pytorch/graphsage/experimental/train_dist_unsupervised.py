@@ -403,18 +403,17 @@ def run(args, device, data):
     else:
         pred = generate_emb(model.module, g, g.ndata['feat'], args.batch_size_eval, device)
     if g.rank() == 0:
-        if not args.eval:
-            if args.out_npz is not None:
-                pred = pred[np.arange(labels.shape[0])].cpu().numpy()
-                labels = labels.cpu().numpy()
-                if global_train_nid is not None:
-                    global_train_nid = global_train_nid.cpu().numpy()
-                    global_val_nid = global_valid_nid.cpu().numpy()
-                    global_test_nid = global_test_nid.cpu().numpy()
-                    np.savez(args.out_npz, emb=pred, train_ids=global_train_nid, val_ids=global_val_nid, test_ids=global_test_nid,labels=labels)
-                else:
-                    np.savez(args.out_npz, emb=pred,labels=labels)
-        else:
+        if args.out_npz is not None:
+            pred = pred[np.arange(labels.shape[0])].cpu().numpy()
+            labels = labels.cpu().numpy()
+            if global_train_nid is not None:
+                global_train_nid = global_train_nid.cpu().numpy()
+                global_val_nid = global_valid_nid.cpu().numpy()
+                global_test_nid = global_test_nid.cpu().numpy()
+                np.savez(args.out_npz, emb=pred, train_ids=global_train_nid, val_ids=global_val_nid, test_ids=global_test_nid,labels=labels)
+            else:
+                np.savez(args.out_npz, emb=pred,labels=labels)
+        if args.eval:
             eval_acc, test_acc = compute_acc(pred, labels, global_train_nid, global_valid_nid, global_test_nid, g.rank())
             print('eval acc {:.4f}; test acc {:.4f}'.format(eval_acc, test_acc))
         print("training time: ", time.time()-stime)
@@ -466,7 +465,7 @@ def main(args):
         device = th.device('cpu')
     else:
         device = th.device('cuda:'+str(g.rank() % args.num_gpus))
-    import sys; sys.exit(0)
+
     # Pack data
     in_feats = g.ndata['features'].shape[1]
     global_train_nid = global_train_nid.squeeze()
@@ -484,6 +483,7 @@ if __name__ == '__main__':
     register_data_args(parser)
     parser.add_argument('--graph_name', type=str, help='graph name')
     parser.add_argument('--out_npz', type=str, help='save file')
+    parser.add_argument('--eval', type=str, help='save file')
     parser.add_argument('--id', type=int, help='the partition id')
     parser.add_argument('--ip_config', type=str, help='The file for IP configuration')
     parser.add_argument('--part_config', type=str, help='The path to the partition config file')
