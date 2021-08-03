@@ -5,6 +5,7 @@ import argparse, time, math
 import numpy as np
 from functools import wraps
 import tqdm
+import time
 import sklearn.linear_model as lm
 import sklearn.metrics as skm
 
@@ -267,7 +268,7 @@ def generate_emb(model, g, inputs, batch_size, device):
 
     return pred
 
-def compute_acc(emb, labels, train_nids, val_nids, test_nids):
+def compute_acc(emb, labels, train_nids, val_nids, test_nids,seed):
     """
     Compute the accuracy of prediction given the labels.
     
@@ -290,7 +291,8 @@ def compute_acc(emb, labels, train_nids, val_nids, test_nids):
     labels = labels.cpu().numpy()
 
     emb = (emb - emb.mean(0, keepdims=True)) / emb.std(0, keepdims=True)
-    lr = lm.LogisticRegression(multi_class='multinomial', max_iter=10000)
+    # lr = lm.LogisticRegression(multi_class='multinomial', max_iter=10000, random_state=seed)
+    lr = MLPClassifier(alpha=1e-5,hidden_layer_sizes=(64,),max_iter=5000, random_state=seed)
     lr.fit(emb[train_nids], labels[train_nids])
 
     pred = lr.predict(emb)
@@ -300,6 +302,7 @@ def compute_acc(emb, labels, train_nids, val_nids, test_nids):
 
 def run(args, device, data):
     # Unpack data
+    stime=time.time()
     train_eids, train_nids, in_feats, g, global_train_nid, global_valid_nid, global_test_nid, labels = data
     # Create sampler
     sampler = NeighborSampler(g, [int(fanout) for fanout in args.fan_out.split(',')], train_nids,
@@ -403,14 +406,22 @@ def run(args, device, data):
     else:
         pred = generate_emb(model.module, g, g.ndata['feat'], args.batch_size_eval, device)
     if g.rank() == 0:
-        if args.out_npz is not None:
+        if args.out_npz or args.eval:
             pred = pred[np.arange(labels.shape[0])].cpu().numpy()
             labels = labels.cpu().numpy()
             if global_train_nid is not None:
                 global_train_nid = global_train_nid.cpu().numpy()
                 global_val_nid = global_valid_nid.cpu().numpy()
                 global_test_nid = global_test_nid.cpu().numpy()
-                np.savez(args.out_npz, emb=pred, train_ids=global_train_nid, val_ids=global_val_nid, test_ids=global_test_nid,labels=labels)
+        if args.out_npz is not None: 
+            if global_train_nid is not None:
+                np.savez(args.out_npz, 
+                    trainX = emb[global_train_nid],
+                    valX=emb[global_val_id],
+                    testX=emb[global_test_id],
+                    trainY = labels[global_train_nid],
+                    valY=labels[global_val_id],
+                    testY=emb[global_test_id])
             else:
                 np.savez(args.out_npz, emb=pred,labels=labels)
         if args.eval:
@@ -483,7 +494,7 @@ if __name__ == '__main__':
     register_data_args(parser)
     parser.add_argument('--graph_name', type=str, help='graph name')
     parser.add_argument('--out_npz', type=str, help='save file')
-    parser.add_argument('--eval', type=str, help='save file')
+    parser.add_argument('--eval', default=False, action='store_true')
     parser.add_argument('--id', type=int, help='the partition id')
     parser.add_argument('--ip_config', type=str, help='The file for IP configuration')
     parser.add_argument('--part_config', type=str, help='The path to the partition config file')
