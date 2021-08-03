@@ -437,19 +437,36 @@ def main(args):
     if args.train_label_only:
         train_nids = dgl.distributed.node_split(g.ndata['train_mask'], g.get_partition_book(), force_even=True)
         srcs, dsts = g.find_edges(np.arange(g.number_of_edges()))
-        train_edges = (g.ndata['train_mask'][srcs] + g.ndata['train_mask'][dsts])
-        train_eids = dgl.distributed.edge_split(train_edges.type(th.bool), g.get_partition_book(), force_even=True)
-        train_edges[train_edges>=1] = 1.0
-        print(train_edges.sum())
+        train_edges = (g.ndata['train_mask'][srcs] + g.ndata['train_mask'][dsts]).type(th.bool)
+        if args.max_edges == -1:
+            train_eids = dgl.distributed.edge_split(train_edges, g.get_partition_book(), force_even=True)
+            print("N train edges:",train_edges.float().sum().item())
+        else:
+            n_curr_train = train_edges.float().sum().item()
+            if args.max_edges >= n_curr_train:
+                train_eids = dgl.distributed.edge_split(train_edges, g.get_partition_book(), force_even=True)
+                print("N train edges:",n_curr_train)
+            else:
+                random_probs = th.rand(g.number_of_edges())
+                random_probs = (random_probs < args.max_edges / n_curr_train)
+                train_edges = th.logical_and(train_edges, random_probs)
+                train_eids = dgl.distributed.edge_split(train_edges, g.get_partition_book(), force_even=True)
+                print("N train edges:",train_edges.float().sum().item())
     else:
         train_nids = dgl.distributed.node_split(th.ones((g.number_of_nodes(),), dtype=th.bool), g.get_partition_book())
-        train_eids = dgl.distributed.edge_split(th.ones((g.number_of_edges(),), dtype=th.bool), g.get_partition_book(), force_even=True)
-
+        if args.max_edges == -1:
+            train_eids = dgl.distributed.edge_split(th.ones((g.number_of_edges(),), dtype=th.bool), g.get_partition_book(), force_even=True)
+            print("N train edges:",g.number_of_edges())
+        else:
+            random_probs = th.rand(g.number_of_edges())
+            random_probs = (random_probs < args.max_edges / g.number_of_edges())
+            train_eids = dgl.distributed.edge_split(random_probs, g.get_partition_book(), force_even=True)
+            print("N train edges:",random_probs.float().sum())
     if args.num_gpus == -1:
         device = th.device('cpu')
     else:
         device = th.device('cuda:'+str(g.rank() % args.num_gpus))
-
+    import sys; sys.exit(0)
     # Pack data
     in_feats = g.ndata['features'].shape[1]
     global_train_nid = global_train_nid.squeeze()
@@ -472,6 +489,7 @@ if __name__ == '__main__':
     parser.add_argument('--part_config', type=str, help='The path to the partition config file')
     parser.add_argument('--n_classes', type=int, help='the number of classes')
     parser.add_argument('--train_label_only', default=False, action='store_true')
+    parser.add_argument('--max_edges', type=int, default=-1)
     parser.add_argument('--num_gpus', type=int, default=-1, 
                         help="the number of GPU device. Use -1 for CPU training")
     parser.add_argument('--num_epochs', type=int, default=20)
