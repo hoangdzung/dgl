@@ -401,11 +401,16 @@ def run(args, device, data):
         epoch += 1
 
     # evaluate the embedding using LogisticRegression
+    print("Generate embedding")
+    start=time.time()
     if args.standalone:
         pred = generate_emb(model,g, g.ndata['feat'], args.batch_size_eval, device)
     else:
         pred = generate_emb(model.module, g, g.ndata['feat'], args.batch_size_eval, device)
+    print("Take ", time.time()-start)
     if g.rank() == 0:
+        start=time.time()
+        print("Convert to numpy")
         if args.out_npz or args.eval:
             pred = pred[np.arange(labels.shape[0])].cpu().numpy()
             labels = labels.cpu().numpy()
@@ -413,6 +418,9 @@ def run(args, device, data):
                 global_train_nid = global_train_nid.cpu().numpy()
                 global_val_nid = global_valid_nid.cpu().numpy()
                 global_test_nid = global_test_nid.cpu().numpy()
+        print("Take ", time.time()-start)
+        start=time.time()
+        print("Save output")
         if args.out_npz is not None: 
             if global_train_nid is not None:
                 np.savez(args.out_npz, 
@@ -424,9 +432,13 @@ def run(args, device, data):
                     testY=emb[global_test_id])
             else:
                 np.savez(args.out_npz, emb=pred,labels=labels)
+        print("Take ", time.time()-start)
+        start=time.time()
+        print("Evaluate")
         if args.eval:
             eval_acc, test_acc = compute_acc(pred, labels, global_train_nid, global_valid_nid, global_test_nid, g.rank())
             print('eval acc {:.4f}; test acc {:.4f}'.format(eval_acc, test_acc))
+        print("Take ", time.time()-start)
         print("training time: ", time.time()-stime)
     if not args.standalone:
         th.distributed.barrier()
