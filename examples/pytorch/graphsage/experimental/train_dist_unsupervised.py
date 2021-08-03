@@ -8,6 +8,7 @@ import tqdm
 import time
 import sklearn.linear_model as lm
 import sklearn.metrics as skm
+from sklearn.neural_network import MLPClassifier
 
 import dgl
 from dgl import DGLGraph
