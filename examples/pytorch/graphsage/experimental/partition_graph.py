@@ -29,6 +29,8 @@ if __name__ == '__main__':
         g, _ = load_reddit()
     elif args.dataset == 'ogb-product':
         g, _ = load_ogb('ogbn-products')
+    elif args.dataset == 'ogb-arxiv':
+        g, _ = load_ogb('ogbn-arxiv')
     elif args.dataset == 'ogb-paper100M':
         g, _ = load_ogb('ogbn-papers100M')
     print('load {} takes {:.3f} seconds'.format(args.dataset, time.time() - start))
