@@ -304,19 +304,15 @@ def generate_emb(model, g, inputs, batch_size, device):
     val_nodes = dgl.distributed.node_split(g.ndata['val_mask'], g.get_partition_book(), force_even=True)
     test_nodes = dgl.distributed.node_split(g.ndata['test_mask'], g.get_partition_book(), force_even=True)
 
-    n_train = train_nodes.shape[0]
-    n_val = val_nodes.shape[0]
-    n_test = test_nodes.shape[0]
-
     sampler = SupNeighborSampler(g, [int(fanout) for fanout in args.fan_out.split(',')],
                             dgl.distributed.sample_neighbors, device)
-    train_embs = dgl.distributed.DistTensor((g.number_of_nodes(), model.n_hidden), th.float32, 'e',
+    embs = dgl.distributed.DistTensor((g.number_of_nodes(), model.n_hidden), th.float32, 'e',
                                     persistent=True)
-    train_labels = dgl.distributed.DistTensor((g.number_of_nodes(),), th.long, 'l',
+    labels = dgl.distributed.DistTensor((g.number_of_nodes(),), th.long, 'l',
                                     persistent=True)
     # Create DataLoader for constructing blocks
     train_dataloader = DistDataLoader(
-        dataset=train_nodes.numpy(),
+        dataset=np.concatenate([train_nodes.numpy(), val_nodes.numpy(), test_nodes.numpy()]),
         batch_size=batch_size,
         collate_fn=sampler.sample_blocks,
         shuffle=True,
@@ -334,16 +330,14 @@ def generate_emb(model, g, inputs, batch_size, device):
         blocks = [block.to(device) for block in blocks]
         batch_labels = batch_labels.to(device)
         batch_pred = model(blocks, batch_inputs)
-        train_embs[output_nodes] = batch_pred.cpu()
-        train_labels[output_nodes] = batch_labels.cpu()
+        embs[output_nodes] = batch_pred.cpu()
+        labels[output_nodes] = batch_labels.cpu()
 
     g.barrier() 
-    print(train_embs.cpu().shape)
-    import pdb;pdb.set_trace()
-    with th.no_grad():
-        pred = model.inference(g, inputs, batch_size, device)
+    # with th.no_grad():
+    #     pred = model.inference(g, inputs, batch_size, device)
 
-    return pred
+    return embs, labels
 
 def compute_acc(emb, labels, train_nids, val_nids, test_nids,seed):
     """
@@ -481,16 +475,16 @@ def run(args, device, data):
     # print("Generate embedding")
     # start=time.time()
     if args.standalone:
-        pred = generate_emb(model,g, g.ndata['feat'], args.batch_size_eval, device)
+        pred, labels = generate_emb(model,g, g.ndata['feat'], args.batch_size_eval, device)
     else:
-        pred = generate_emb(model.module, g, g.ndata['feat'], args.batch_size_eval, device)
+        pred, labels = generate_emb(model.module, g, g.ndata['feat'], args.batch_size_eval, device)
     # print("Take ", time.time()-start)
     if g.rank() == 0:
         start=time.time()
         print("Convert to numpy")
         if args.out_npz or args.eval:
             pred = pred[np.arange(labels.shape[0])].cpu().numpy()
-            labels = labels.cpu().numpy()
+            labels = labels[np.arange(labels.shape[0])].cpu().numpy()
             if global_train_nid is not None:
                 global_train_nid = global_train_nid.cpu().numpy()
                 global_val_nid = global_valid_nid.cpu().numpy()
