@@ -425,11 +425,11 @@ def run(args, device, data):
             if global_train_nid is not None:
                 np.savez(args.out_npz, 
                     trainX = pred[global_train_nid],
-                    valX=pred[global_val_id],
-                    testX=pred[global_test_id],
+                    valX=pred[global_valid_nid],
+                    testX=pred[global_test_nid],
                     trainY = labels[global_train_nid],
-                    valY=labels[global_val_id],
-                    testY=pred[global_test_id])
+                    valY=labels[global_test_nid],
+                    testY=pred[global_test_nid])
             else:
                 np.savez(args.out_npz, emb=pred,labels=labels)
         print("Take ", time.time()-start)
