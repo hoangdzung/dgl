@@ -176,6 +176,33 @@ class PosNeighborSampler(object):
             blocks.insert(0, block)
         return blocks
 
+class SupNeighborSampler(object):
+    def __init__(self, g, fanouts, sample_neighbors, device):
+        self.g = g
+        self.fanouts = fanouts
+        self.sample_neighbors = sample_neighbors
+        self.device = device
+
+    def sample_blocks(self, seeds):
+        seeds = th.LongTensor(np.asarray(seeds))
+        blocks = []
+        for fanout in self.fanouts:
+            # For each seed node, sample ``fanout`` neighbors.
+            frontier = self.sample_neighbors(self.g, seeds, fanout, replace=True)
+            # Then we compact the frontier into a bipartite graph for message passing.
+            block = dgl.to_block(frontier, seeds)
+            # Obtain the seed nodes for next layer.
+            seeds = block.srcdata[dgl.NID]
+
+            blocks.insert(0, block)
+
+        input_nodes = blocks[0].srcdata[dgl.NID]
+        seeds = blocks[-1].dstdata[dgl.NID]
+        batch_inputs, batch_labels = load_subtensor_sup(self.g, seeds, input_nodes, "cpu")
+        blocks[0].srcdata['features'] = batch_inputs
+        blocks[-1].dstdata['labels'] = batch_labels
+        return blocks
+
 class DistSAGE(SAGE):
     def __init__(self, in_feats, n_hidden, n_classes, n_layers,
                  activation, dropout):
@@ -239,6 +266,14 @@ def load_subtensor(g, input_nodes, device):
     batch_inputs = g.ndata['features'][input_nodes].to(device)
     return batch_inputs
 
+def load_subtensor_sup(g, seeds, input_nodes, device):
+    """
+    Copys features and labels of a set of nodes onto GPU.
+    """
+    batch_inputs = g.ndata['features'][input_nodes].to(device)
+    batch_labels = g.ndata['labels'][seeds].to(device)
+    return batch_inputs, batch_labels
+
 class CrossEntropyLoss(nn.Module):
     def forward(self, block_outputs, pos_graph, neg_graph):
         with pos_graph.local_scope():
@@ -264,6 +299,47 @@ def generate_emb(model, g, inputs, batch_size, device):
     device : The GPU device to evaluate on.
     """
     model.eval()
+
+    train_nodes = dgl.distributed.node_split(g.ndata['train_mask'], g.get_partition_book(), force_even=True)
+    val_nodes = dgl.distributed.node_split(g.ndata['val_mask'], g.get_partition_book(), force_even=True)
+    test_nodes = dgl.distributed.node_split(g.ndata['test_mask'], g.get_partition_book(), force_even=True)
+
+    n_train = train_nodes.shape[0]
+    n_val = val_nodes.shape[0]
+    n_test = test_nodes.shape[0]
+
+    sampler = SupNeighborSampler(g, [int(fanout) for fanout in args.fan_out.split(',')],
+                            dgl.distributed.sample_neighbors, device)
+    train_embs = dgl.distributed.DistTensor((g.number_of_nodes(), model.n_hidden), th.float32, 'e',
+                                    persistent=True)
+    train_labels = dgl.distributed.DistTensor((g.number_of_nodes(),), th.long, 'l',
+                                    persistent=True)
+    # Create DataLoader for constructing blocks
+    train_dataloader = DistDataLoader(
+        dataset=train_nodes.numpy(),
+        batch_size=batch_size,
+        collate_fn=sampler.sample_blocks,
+        shuffle=True,
+        drop_last=False)
+    for step, blocks in enumerate(train_dataloader):
+
+        # The nodes for input lies at the LHS side of the first block.
+        # The nodes for output lies at the RHS side of the last block.
+
+        output_nodes = blocks[-1].dstdata[dgl.NID]
+        batch_inputs = blocks[0].srcdata['features']
+        batch_labels = blocks[-1].dstdata['labels']
+        batch_labels = batch_labels.long()
+
+        blocks = [block.to(device) for block in blocks]
+        batch_labels = batch_labels.to(device)
+        batch_pred = model(blocks, batch_inputs)
+        train_embs[output_nodes] = batch_pred.cpu()
+        train_labels[output_nodes] = batch_labels.cpu()
+
+    g.barrier() 
+    print(train_embs.cpu().shape)
+    import pdb;pdb.set_trace()
     with th.no_grad():
         pred = model.inference(g, inputs, batch_size, device)
 
