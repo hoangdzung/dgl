@@ -284,11 +284,11 @@ def compute_acc(emb, labels, train_nids, val_nids, test_nids,seed):
     test_nids: The test set node ids
     """
 
-    emb = emb[np.arange(labels.shape[0])].cpu().numpy()
-    train_nids = train_nids.cpu().numpy()
-    val_nids = val_nids.cpu().numpy()
-    test_nids = test_nids.cpu().numpy()
-    labels = labels.cpu().numpy()
+    # emb = emb[np.arange(labels.shape[0])].cpu().numpy()
+    # train_nids = train_nids.cpu().numpy()
+    # val_nids = val_nids.cpu().numpy()
+    # test_nids = test_nids.cpu().numpy()
+    # labels = labels.cpu().numpy()
 
     emb = (emb - emb.mean(0, keepdims=True)) / emb.std(0, keepdims=True)
     # lr = lm.LogisticRegression(multi_class='multinomial', max_iter=10000, random_state=seed)
