@@ -67,7 +67,7 @@ def load_custom(datadir):
     graph.ndata['train_mask'] = train_mask
     graph.ndata['val_mask'] = val_mask
     graph.ndata['test_mask'] = test_mask
-    print('finish constructing', name)
+    print('finish constructing', datadir)
 
     return graph, num_labels
 
