@@ -1,6 +1,7 @@
 import dgl
 import torch as th
 import os 
+import numpy as np 
 
 def load_reddit():
     from dgl.data import RedditDataset
@@ -42,13 +43,13 @@ def load_ogb(name):
     return graph, num_labels
 
 def load_custom(datadir):
-    edgelist = np.loadtxt(os.path.join(datadir,'edgelist.txt')).astype(int)
-    features = np.loadtxt(os.path.join(datadir,'features.txt'))
-    features = torch.tensor(features)
-    labels = np.loadtxt(os.path.join(datadir,'labels.txt'))
+    edgelist = np.load(os.path.join(datadir,'edgelist.npy')).astype(int)
+    features = np.load(os.path.join(datadir,'features.npy'))
+    features = th.tensor(features)
+    labels = np.load(os.path.join(datadir,'labels.npy'))
     labels[labels==-1]=float('nan')
-    labels = torch.tensor(labels)
-    splits = np.loadtxt(os.path.join(datadir,'splits.txt')).astype(int)
+    labels = th.tensor(labels)
+    splits = np.load(os.path.join(datadir,'splits.npy')).astype(int)
 
     n_nodes = labels.shape[0]
     graph = dgl.graph((edgelist[:,0], edgelist[:,1]), num_nodes=labels.shape[0])
@@ -57,9 +58,9 @@ def load_custom(datadir):
     in_feats = graph.ndata['features'].shape[1]
     num_labels = len(th.unique(labels[th.logical_not(th.isnan(labels))]))
 
-    train_mask = torch.zeros(n_nodes, dtype=torch.bool)
-    val_mask = torch.zeros(n_nodes, dtype=torch.bool)
-    test_mask = torch.zeros(n_nodes, dtype=torch.bool)
+    train_mask = th.zeros(n_nodes, dtype=th.bool)
+    val_mask = th.zeros(n_nodes, dtype=th.bool)
+    test_mask = th.zeros(n_nodes, dtype=th.bool)
     train_mask[splits==1] = True
     val_mask[splits==2] = True
     test_mask[splits==3] = True
