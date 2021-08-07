@@ -45,11 +45,11 @@ def load_ogb(name):
 def load_custom(datadir):
     edgelist = np.load(os.path.join(datadir,'edgelist.npy')).astype(int)
     features = np.load(os.path.join(datadir,'features.npy'))
-    features = th.tensor(features)
-    labels = np.load(os.path.join(datadir,'labels.npy'))
+    features = th.tensor(features).float()
+    labels = np.load(os.path.join(datadir,'labels.npy')).reshape((-1,))
     labels[labels==-1]=float('nan')
     labels = th.tensor(labels)
-    splits = np.load(os.path.join(datadir,'splits.npy')).astype(int)
+    splits = np.load(os.path.join(datadir,'splits.npy')).astype(int).reshape((-1,))
 
     n_nodes = labels.shape[0]
     graph = dgl.graph((edgelist[:,0], edgelist[:,1]), num_nodes=labels.shape[0])

@@ -243,7 +243,7 @@ def run(args, device, data):
         epoch += 1
 
 
-        if epoch % args.eval_every == 0 and epoch != 0:
+        if epoch % args.eval_every == 0:
             start = time.time()
             val_acc, test_acc = evaluate(model.module, g, g.ndata['features'],
                                          g.ndata['labels'], val_nid, test_nid, args.batch_size_eval, device)
