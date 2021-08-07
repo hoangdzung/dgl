@@ -11,6 +11,8 @@ if __name__ == '__main__':
     argparser = argparse.ArgumentParser("Partition builtin graphs")
     argparser.add_argument('--dataset', type=str, default='reddit',
                            help='datasets: reddit, ogb-product, ogb-paper100M')
+    argparser.add_argument('--datadir', type=str, default='reddit',
+                           help='datasets: reddit, ogb-product, ogb-paper100M')
     argparser.add_argument('--num_parts', type=int, default=4,
                            help='number of partitions')
     argparser.add_argument('--part_method', type=str, default='metis',
@@ -34,8 +36,8 @@ if __name__ == '__main__':
         g, _ = load_ogb('ogbn-arxiv')
     elif args.dataset == 'ogb-paper100M':
         g, _ = load_ogb('ogbn-papers100M')
-    elif os.path.isdir(args.dataset):
-        g, _ = load_custom(args.dataset)
+    elif os.path.isdir(args.datadir):
+        g, _ = load_custom(args.datadir)
     else:
         raise NotImplementedError
 
