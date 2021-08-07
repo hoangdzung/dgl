@@ -3,8 +3,9 @@ import numpy as np
 import torch as th
 import argparse
 import time
+import os 
 
-from load_graph import load_reddit, load_ogb
+from load_graph import load_reddit, load_ogb, load_custom
 
 if __name__ == '__main__':
     argparser = argparse.ArgumentParser("Partition builtin graphs")
@@ -33,6 +34,11 @@ if __name__ == '__main__':
         g, _ = load_ogb('ogbn-arxiv')
     elif args.dataset == 'ogb-paper100M':
         g, _ = load_ogb('ogbn-papers100M')
+    elif os.path.isdir(args.dataset):
+        g, _ = load_custom(args.dataset)
+    else:
+        raise NotImplementedError
+
     print('load {} takes {:.3f} seconds'.format(args.dataset, time.time() - start))
     print('|V|={}, |E|={}'.format(g.number_of_nodes(), g.number_of_edges()))
     print('train: {}, valid: {}, test: {}'.format(th.sum(g.ndata['train_mask']),

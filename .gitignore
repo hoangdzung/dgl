@@ -1,6 +1,7 @@
 # IDE
 .idea
 
+examples/pytorch/graphsage/experimental/data*
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
