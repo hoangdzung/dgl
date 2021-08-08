@@ -151,7 +151,13 @@ def evaluate(model, g, inputs, labels, val_nid, test_nid, batch_size, device):
     with th.no_grad():
         pred = model.inference(g, inputs, batch_size, device)
     model.train()
-    return compute_acc(pred[val_nid], labels[val_nid]), compute_acc(pred[test_nid], labels[test_nid])
+    pred_val = pred[val_nid]
+    pred_test = pred[test_nid]
+    labels_val = labels[val_nid]
+    labels_test = labels[test_nid]
+
+    print("Rank {} len val {} len test {}".format(g.rank(), len(pred_val), len(pred_test)))
+    return compute_acc(pred_val, labels_val), compute_acc(pred_test, labels_test)
 
 def run(args, device, data):
     # Unpack data
@@ -243,15 +249,14 @@ def run(args, device, data):
         epoch += 1
 
 
-        if epoch % args.eval_every == 0:
-            start = time.time()
-            if args.standalone:
-                val_acc, test_acc = evaluate(model, g, g.ndata['features'],
-                                            g.ndata['labels'], val_nid, test_nid, args.batch_size_eval, device)
-            else:
-                val_acc, test_acc = evaluate(model.module, g, g.ndata['features'],
-                                            g.ndata['labels'], val_nid, test_nid, args.batch_size_eval, device)
-            print('Part {}, Val Acc {:.4f}, Test Acc {:.4f}, time: {:.4f}'.format(g.rank(), val_acc, test_acc,
+    start = time.time()
+    if args.standalone:
+        val_acc, test_acc = evaluate(model, g, g.ndata['features'],
+                                    g.ndata['labels'], val_nid, test_nid, args.batch_size_eval, device)
+    else:
+        val_acc, test_acc = evaluate(model.module, g, g.ndata['features'],
+                                    g.ndata['labels'], val_nid, test_nid, args.batch_size_eval, device)
+    print('Part {}, Val Acc {:.4f}, Test Acc {:.4f}, time: {:.4f}'.format(g.rank(), val_acc, test_acc,
                                                                                 time.time() - start))
 def main(args):
     dgl.distributed.initialize(args.ip_config)
