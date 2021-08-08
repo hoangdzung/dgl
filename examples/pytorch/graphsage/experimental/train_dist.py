@@ -248,16 +248,16 @@ def run(args, device, data):
             g.rank(), toc - tic, sample_time, forward_time, backward_time, update_time, num_seeds, num_inputs))
         epoch += 1
 
-
-    start = time.time()
-    if args.standalone:
-        val_acc, test_acc = evaluate(model, g, g.ndata['features'],
-                                    g.ndata['labels'], val_nid, test_nid, args.batch_size_eval, device)
-    else:
-        val_acc, test_acc = evaluate(model.module, g, g.ndata['features'],
-                                    g.ndata['labels'], val_nid, test_nid, args.batch_size_eval, device)
-    print('Part {}, Val Acc {:.4f}, Test Acc {:.4f}, time: {:.4f}'.format(g.rank(), val_acc, test_acc,
-                                                                                time.time() - start))
+        if epoch%args.eval_every==0:
+            start = time.time()
+            if args.standalone:
+                val_acc, test_acc = evaluate(model, g, g.ndata['features'],
+                                            g.ndata['labels'], val_nid, test_nid, args.batch_size_eval, device)
+            else:
+                val_acc, test_acc = evaluate(model.module, g, g.ndata['features'],
+                                            g.ndata['labels'], val_nid, test_nid, args.batch_size_eval, device)
+            print('Part {}, Val Acc {:.4f}, Test Acc {:.4f}, time: {:.4f}'.format(g.rank(), val_acc, test_acc,
+                                                                                        time.time() - start))
 def main(args):
     dgl.distributed.initialize(args.ip_config)
     if not args.standalone:
