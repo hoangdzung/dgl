@@ -500,7 +500,7 @@ def run(args, device, data):
                     testX=pred[global_test_nid],
                     trainY = labels[global_train_nid],
                     valY=labels[global_test_nid],
-                    testY=pred[global_test_nid])
+                    testY=labels[global_test_nid])
             else:
                 np.savez(args.out_npz, emb=pred,labels=labels)
         print("Take ", time.time()-start)
