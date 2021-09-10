@@ -373,7 +373,7 @@ def compute_acc(emb, labels, train_nids, val_nids, test_nids,seed):
 
 def run(args, device, data):
     # Unpack data
-    # stime=time.time()
+    stime=time.time()
     train_eids, train_nids, in_feats, g, global_train_nid, global_valid_nid, global_test_nid, labels = data
     # Create sampler
     sampler = NeighborSampler(g, [int(fanout) for fanout in args.fan_out.split(',')], train_nids,
@@ -470,7 +470,7 @@ def run(args, device, data):
         print('[{}]Epoch Time(s): {:.4f}, sample: {:.4f}, data copy: {:.4f}, forward: {:.4f}, backward: {:.4f}, update: {:.4f}, #seeds: {}, #inputs: {}'.format(
             g.rank(), np.sum(step_time), np.sum(sample_t), np.sum(feat_copy_t), np.sum(forward_t), np.sum(backward_t), np.sum(update_t), num_seeds, num_inputs))
         epoch += 1
-
+    print(g.rank(), "Training time ", time.time()-stime)
     # evaluate the embedding using LogisticRegression
     # print("Generate embedding")
     # start=time.time()
@@ -489,7 +489,7 @@ def run(args, device, data):
                 global_train_nid = global_train_nid.cpu().numpy()
                 global_val_nid = global_valid_nid.cpu().numpy()
                 global_test_nid = global_test_nid.cpu().numpy()
-        print("Take ", time.time()-start)
+        print("Generate Embedding Take ", time.time()-start)
         start=time.time()
         print("Save output")
         if args.out_npz is not None: 
@@ -503,7 +503,7 @@ def run(args, device, data):
                     testY=labels[global_test_nid])
             else:
                 np.savez(args.out_npz, emb=pred,labels=labels)
-        print("Take ", time.time()-start)
+        print("Save embedding take ", time.time()-start)
         start=time.time()
         print("Evaluate")
         if args.eval:
