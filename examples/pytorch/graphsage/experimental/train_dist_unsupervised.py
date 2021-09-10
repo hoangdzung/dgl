@@ -538,9 +538,9 @@ def run(args, device, data):
     # print("Generate embedding")
     # start=time.time()
     if args.standalone:
-        pred, labels = generate_emb(model,g, g.ndata['feat'], args.batch_size_eval, device)
+        pred, labels = generate_emb(model,g, g.ndata['features'], args.batch_size_eval, device)
     else:
-        pred, labels = generate_emb(model.module, g, g.ndata['feat'], args.batch_size_eval, device)
+        pred, labels = generate_emb(model.module, g, g.ndata['features'], args.batch_size_eval, device)
     # print("Take ", time.time()-start)
     if g.rank() == 0:
         start=time.time()
