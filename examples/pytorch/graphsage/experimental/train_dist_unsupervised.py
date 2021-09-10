@@ -17,6 +17,7 @@ from dgl.data.utils import load_graphs
 import dgl.function as fn
 import dgl.nn.pytorch as dglnn
 
+import torch
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
