@@ -421,7 +421,7 @@ def compute_acc(emb, labels, train_nids, val_nids, test_nids,seed):
     test_acc = skm.accuracy_score(labels[test_nids], pred[test_nids])
     return eval_acc, test_acc
 
-def run(args, device, data):
+def run(args, device, data, global_stime=0):
     # Unpack data
     stime=time.time()
     train_eids, train_nids, in_feats, g, global_train_nid, global_valid_nid, global_test_nid, labels = data
@@ -462,7 +462,12 @@ def run(args, device, data):
     loss_fcn = CrossEntropyLoss()
     loss_fcn = loss_fcn.to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
-
+    if os.path.isfile(args.checkpoint):
+        state_dict, curr_epoch = torch.load(args.checkpoint)
+        model.load_state_dict(state_dict)
+    else:
+        curr_epoch = -1
+    print("Init time ", time.time()-global_stime)
     # Training loop
     epoch = 0
     for epoch in range(args.num_epochs):
@@ -529,10 +534,15 @@ def run(args, device, data):
                     np.sum(sample_t[-args.log_every:]), np.sum(feat_copy_t[-args.log_every:]), np.sum(forward_t[-args.log_every:]),
                     np.sum(backward_t[-args.log_every:]), np.sum(update_t[-args.log_every:])))
             start = time.time()
-
+            if args.interrupt_epoch >=0:
+                break
         print('[{}]Epoch Time(s): {:.4f}, sample: {:.4f}, data copy: {:.4f}, forward: {:.4f}, backward: {:.4f}, update: {:.4f}, #seeds: {}, #inputs: {}'.format(
             g.rank(), np.sum(step_time), np.sum(sample_t), np.sum(feat_copy_t), np.sum(forward_t), np.sum(backward_t), np.sum(update_t), num_seeds, num_inputs))
         epoch += 1
+        if g.rank() ==0 and args.interrupt_epoch >=0:
+            torch.save([model.state_dict(), epoch], args.checkpoint)
+        if epoch <= args.interrupt_epoch and g.rank() ==0:
+            sys.exit(137)
     print(g.rank(), "Training time ", time.time()-stime)
     # evaluate the embedding using LogisticRegression
     # print("Generate embedding")
@@ -579,6 +589,7 @@ def run(args, device, data):
         g._client.barrier()
 
 def main(args):
+    stime=time.time()
     dgl.distributed.initialize(args.ip_config)
     if not args.standalone:
         th.distributed.init_process_group(backend='gloo')
@@ -632,7 +643,7 @@ def main(args):
     print("number of valid {}".format(global_valid_nid.shape[0]))
     print("number of test {}".format(global_test_nid.shape[0]))
     data = train_eids, train_nids, in_feats, g, global_train_nid, global_valid_nid, global_test_nid, labels
-    run(args, device, data)
+    run(args, device, data, stime)
     print("parent ends")
 
 if __name__ == '__main__':
@@ -670,6 +681,8 @@ if __name__ == '__main__':
         help="sharing neg nodes for positive nodes")
     parser.add_argument('--remove_edge', default=False, action='store_true',
         help="whether to remove edges during sampling")
+    parser.add_argument('--interrupt_epoch', type=int, default=-1)
+    parser.add_argument('--checkpoint',default='ckpt.pt')
     args = parser.parse_args()
     
     print(args)
