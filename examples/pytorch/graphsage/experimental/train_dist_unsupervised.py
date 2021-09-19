@@ -210,7 +210,7 @@ class NeighborSampler(object):
             blocks.insert(0, block)
 
         input_nodes = blocks[0].srcdata[dgl.NID]
-        blocks[0].srcdata['feat'] = load_subtensor(self.g, input_nodes, 'cpu')
+        blocks[0].srcdata['features'] = load_subtensor(self.g, input_nodes, 'cpu')
         # Pre-generate CSR format that it can be used in training directly
         return pos_graph, neg_graph, blocks
 
@@ -294,7 +294,7 @@ def load_subtensor(g, input_nodes, device):
     """
     Copys features and labels of a set of nodes onto GPU.
     """
-    batch_inputs = g.ndata['feat'][input_nodes].to(device)
+    batch_inputs = g.ndata['features'][input_nodes].to(device)
     return batch_inputs
 
 class CrossEntropyLoss(nn.Module):
@@ -442,7 +442,7 @@ def run(args, device, data, global_stime=None):
             # The nodes for output lies at the RHS side of the last block.
 
             # Load the input features as well as output labels
-            batch_inputs = blocks[0].srcdata['feat']
+            batch_inputs = blocks[0].srcdata['features']
             copy_time = time.time()
             feat_copy_t.append(copy_time - tic_step)
 
@@ -484,9 +484,9 @@ def run(args, device, data, global_stime=None):
 
     # evaluate the embedding using LogisticRegression
     if args.standalone:
-        pred = generate_emb(model,g, g.ndata['feat'], args.batch_size_eval, device)
+        pred = generate_emb(model,g, g.ndata['features'], args.batch_size_eval, device)
     else:
-        pred = generate_emb(model.module, g, g.ndata['feat'], args.batch_size_eval, device)
+        pred = generate_emb(model.module, g, g.ndata['features'], args.batch_size_eval, device)
     if g.rank() == 0:
         if not args.eval:
             if args.out_npz is not None:
@@ -543,7 +543,7 @@ def main(args):
         device = th.device('cuda:'+str(g.rank() % args.num_gpus))
 
     # Pack data
-    in_feats = g.ndata['feat'].shape[1]
+    in_feats = g.ndata['features'].shape[1]
     data = train_eids, train_nids, in_feats, g, global_train_nid, global_valid_nid, global_test_nid, labels
     run(args, device, data, stime)
     print("parent ends")
