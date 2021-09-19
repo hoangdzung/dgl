@@ -5,7 +5,6 @@ import argparse, time, math
 import numpy as np
 from functools import wraps
 import tqdm
-import time
 import sklearn.linear_model as lm
 import sklearn.metrics as skm
 from sklearn.neural_network import MLPClassifier
@@ -24,6 +23,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.multiprocessing as mp
 from dgl.distributed import DistDataLoader
+#from pyinstrument import Profiler
 from torch_sparse import SparseTensor
 from torch.utils.data import DataLoader
 from torch_geometric.utils.num_nodes import maybe_num_nodes
@@ -33,6 +33,7 @@ try:
     random_walk = torch.ops.torch_cluster.random_walk
 except ImportError:
     random_walk = None
+import time 
 
 class SAGE(nn.Module):
     def __init__(self,
@@ -50,7 +51,8 @@ class SAGE(nn.Module):
         self.layers.append(dglnn.SAGEConv(in_feats, n_hidden, 'mean'))
         for i in range(1, n_layers - 1):
             self.layers.append(dglnn.SAGEConv(n_hidden, n_hidden, 'mean'))
-        self.layers.append(dglnn.SAGEConv(n_hidden, n_classes, 'mean'))
+        # self.layers.append(dglnn.SAGEConv(n_hidden, n_classes, 'mean'))
+        self.layers.append(dglnn.SAGEConv(n_hidden, n_hidden, 'mean'))
         self.dropout = nn.Dropout(dropout)
         self.activation = activation
 
@@ -104,6 +106,7 @@ class SAGE(nn.Module):
 
             x = y
         return y
+
 class RandomWalk():
     def __init__(self, edge_index, walk_length, context_size,
                  walks_per_node=1, p=1, q=1, num_negative_samples=1,
@@ -155,18 +158,23 @@ class NegativeSampler(object):
         return self.neg_nseeds[th.randint(self.neg_nseeds.shape[0], (num_samples,))]
 
 class NeighborSampler(object):
-    def __init__(self, g, fanouts, neg_nseeds, sample_neighbors, num_negs, remove_edge):
+    def __init__(self, g, fanouts, neg_nseeds, sample_neighbors, num_negs, remove_edge, use_rw=False):
         self.g = g
         self.fanouts = fanouts
         self.sample_neighbors = sample_neighbors
         self.neg_sampler = NegativeSampler(g, neg_nseeds)
         self.num_negs = num_negs
         self.remove_edge = remove_edge
+        self.use_rw = use_rw
 
     def sample_blocks(self, seed_edges):
-        n_edges = len(seed_edges)
-        seed_edges = th.LongTensor(np.asarray(seed_edges))
-        heads, tails = self.g.find_edges(seed_edges)
+        if self.use_rw:
+            n_edges = seed_edges.shape[0]
+            heads, tails = seed_edges.T
+        else:
+            n_edges = len(seed_edges)
+            seed_edges = th.LongTensor(np.asarray(seed_edges))
+            heads, tails = self.g.find_edges(seed_edges)
 
         neg_tails = self.neg_sampler(self.num_negs * n_edges)
         neg_heads = heads.view(-1, 1).expand(n_edges, self.num_negs).flatten()
@@ -202,7 +210,7 @@ class NeighborSampler(object):
             blocks.insert(0, block)
 
         input_nodes = blocks[0].srcdata[dgl.NID]
-        blocks[0].srcdata['features'] = load_subtensor(self.g, input_nodes, 'cpu')
+        blocks[0].srcdata['feat'] = load_subtensor(self.g, input_nodes, 'cpu')
         # Pre-generate CSR format that it can be used in training directly
         return pos_graph, neg_graph, blocks
 
@@ -224,33 +232,6 @@ class PosNeighborSampler(object):
             seeds = block.srcdata[dgl.NID]
 
             blocks.insert(0, block)
-        return blocks
-
-class SupNeighborSampler(object):
-    def __init__(self, g, fanouts, sample_neighbors, device):
-        self.g = g
-        self.fanouts = fanouts
-        self.sample_neighbors = sample_neighbors
-        self.device = device
-
-    def sample_blocks(self, seeds):
-        seeds = th.LongTensor(np.asarray(seeds))
-        blocks = []
-        for fanout in self.fanouts:
-            # For each seed node, sample ``fanout`` neighbors.
-            frontier = self.sample_neighbors(self.g, seeds, fanout, replace=True)
-            # Then we compact the frontier into a bipartite graph for message passing.
-            block = dgl.to_block(frontier, seeds)
-            # Obtain the seed nodes for next layer.
-            seeds = block.srcdata[dgl.NID]
-
-            blocks.insert(0, block)
-
-        input_nodes = blocks[0].srcdata[dgl.NID]
-        seeds = blocks[-1].dstdata[dgl.NID]
-        batch_inputs, batch_labels = load_subtensor_sup(self.g, seeds, input_nodes, "cpu")
-        blocks[0].srcdata['features'] = batch_inputs
-        blocks[-1].dstdata['labels'] = batch_labels
         return blocks
 
 class DistSAGE(SAGE):
@@ -278,9 +259,9 @@ class DistSAGE(SAGE):
         y = dgl.distributed.DistTensor((g.number_of_nodes(), self.n_hidden), th.float32, 'h',
                                        persistent=True)
         for l, layer in enumerate(self.layers):
-            if l == len(self.layers) - 1:
-                y = dgl.distributed.DistTensor((g.number_of_nodes(), self.n_classes),
-                                               th.float32, 'h_last', persistent=True)
+            # if l == len(self.layers) - 1:
+            #     y = dgl.distributed.DistTensor((g.number_of_nodes(), self.n_classes),
+            #                                    th.float32, 'h_last', persistent=True)
 
             sampler = PosNeighborSampler(g, [-1], dgl.distributed.sample_neighbors)
             print('|V|={}, eval batch size: {}'.format(g.number_of_nodes(), batch_size))
@@ -313,16 +294,8 @@ def load_subtensor(g, input_nodes, device):
     """
     Copys features and labels of a set of nodes onto GPU.
     """
-    batch_inputs = g.ndata['features'][input_nodes].to(device)
+    batch_inputs = g.ndata['feat'][input_nodes].to(device)
     return batch_inputs
-
-def load_subtensor_sup(g, seeds, input_nodes, device):
-    """
-    Copys features and labels of a set of nodes onto GPU.
-    """
-    batch_inputs = g.ndata['features'][input_nodes].to(device)
-    batch_labels = g.ndata['labels'][seeds].to(device)
-    return batch_inputs, batch_labels
 
 class CrossEntropyLoss(nn.Module):
     def forward(self, block_outputs, pos_graph, neg_graph):
@@ -349,45 +322,10 @@ def generate_emb(model, g, inputs, batch_size, device):
     device : The GPU device to evaluate on.
     """
     model.eval()
+    with th.no_grad():
+        pred = model.inference(g, inputs, batch_size, device)
 
-    train_nodes = dgl.distributed.node_split(g.ndata['train_mask'], g.get_partition_book(), force_even=True)
-    val_nodes = dgl.distributed.node_split(g.ndata['val_mask'], g.get_partition_book(), force_even=True)
-    test_nodes = dgl.distributed.node_split(g.ndata['test_mask'], g.get_partition_book(), force_even=True)
-
-    sampler = SupNeighborSampler(g, [int(fanout) for fanout in args.fan_out.split(',')],
-                            dgl.distributed.sample_neighbors, device)
-    embs = dgl.distributed.DistTensor((g.number_of_nodes(), model.n_hidden), th.float32, 'e',
-                                    persistent=True)
-    labels = dgl.distributed.DistTensor((g.number_of_nodes(),), th.long, 'l',
-                                    persistent=True)
-    # Create DataLoader for constructing blocks
-    train_dataloader = DistDataLoader(
-        dataset=np.concatenate([train_nodes.numpy(), val_nodes.numpy(), test_nodes.numpy()]),
-        batch_size=batch_size,
-        collate_fn=sampler.sample_blocks,
-        shuffle=True,
-        drop_last=False)
-    for step, blocks in enumerate(train_dataloader):
-
-        # The nodes for input lies at the LHS side of the first block.
-        # The nodes for output lies at the RHS side of the last block.
-
-        output_nodes = blocks[-1].dstdata[dgl.NID]
-        batch_inputs = blocks[0].srcdata['features']
-        batch_labels = blocks[-1].dstdata['labels']
-        batch_labels = batch_labels.long()
-
-        blocks = [block.to(device) for block in blocks]
-        batch_labels = batch_labels.to(device)
-        batch_pred = model(blocks, batch_inputs)
-        embs[output_nodes] = batch_pred.cpu()
-        labels[output_nodes] = batch_labels.cpu()
-
-    g.barrier() 
-    # with th.no_grad():
-    #     pred = model.inference(g, inputs, batch_size, device)
-
-    return embs, labels
+    return pred
 
 def compute_acc(emb, labels, train_nids, val_nids, test_nids,seed):
     """
@@ -405,15 +343,14 @@ def compute_acc(emb, labels, train_nids, val_nids, test_nids,seed):
     test_nids: The test set node ids
     """
 
-    # emb = emb[np.arange(labels.shape[0])].cpu().numpy()
-    # train_nids = train_nids.cpu().numpy()
-    # val_nids = val_nids.cpu().numpy()
-    # test_nids = test_nids.cpu().numpy()
-    # labels = labels.cpu().numpy()
+    emb = emb[np.arange(labels.shape[0])].cpu().numpy()
+    train_nids = train_nids.cpu().numpy()
+    val_nids = val_nids.cpu().numpy()
+    test_nids = test_nids.cpu().numpy()
+    labels = labels.cpu().numpy()
 
     emb = (emb - emb.mean(0, keepdims=True)) / emb.std(0, keepdims=True)
-    # lr = lm.LogisticRegression(multi_class='multinomial', max_iter=10000, random_state=seed)
-    lr = MLPClassifier(alpha=1e-5,hidden_layer_sizes=(64,),max_iter=5000, random_state=seed)
+    lr = lm.LogisticRegression(multi_class='multinomial', max_iter=10000, random_state=seed)
     lr.fit(emb[train_nids], labels[train_nids])
 
     pred = lr.predict(emb)
@@ -421,14 +358,13 @@ def compute_acc(emb, labels, train_nids, val_nids, test_nids,seed):
     test_acc = skm.accuracy_score(labels[test_nids], pred[test_nids])
     return eval_acc, test_acc
 
-def run(args, device, data, global_stime=0):
+def run(args, device, data, global_stime=None):
     # Unpack data
-    stime=time.time()
+    stime = time.time()
     train_eids, train_nids, in_feats, g, global_train_nid, global_valid_nid, global_test_nid, labels = data
     # Create sampler
     sampler = NeighborSampler(g, [int(fanout) for fanout in args.fan_out.split(',')], train_nids,
-                              dgl.distributed.sample_neighbors, args.num_negs, args.remove_edge)
-
+                            dgl.distributed.sample_neighbors, args.num_negs, args.remove_edge, use_rw=args.random_walk)
     if args.random_walk:
         all_heads, all_tails  =  g.find_edges(train_eids)
         rw = RandomWalk(torch.stack([all_heads, all_tails]), walk_length=args.walk_length, context_size=args.context_size,walks_per_node=args.walks_per_node,num_nodes = g.num_nodes())
@@ -462,15 +398,17 @@ def run(args, device, data, global_stime=0):
     loss_fcn = CrossEntropyLoss()
     loss_fcn = loss_fcn.to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
+
+    # Training loop
+    #profiler = Profiler()
+    #profiler.start()
     if os.path.isfile(args.checkpoint):
         state_dict, curr_epoch = torch.load(args.checkpoint)
         model.load_state_dict(state_dict)
     else:
         curr_epoch = -1
     print("Init time ", time.time()-global_stime)
-    # Training loop
-    epoch = 0
-    for epoch in range(args.num_epochs):
+    for epoch in range(curr_epoch+1, args.num_epochs):
         sample_time = 0
         copy_time = 0
         forward_time = 0
@@ -492,6 +430,8 @@ def run(args, device, data, global_stime=0):
         # Loop over the dataloader to sample the computation dependency graph as a list of
         # blocks.
         for step, (pos_graph, neg_graph, blocks) in enumerate(dataloader):
+            if args.test_recover:
+                break
             tic_step = time.time()
             sample_t.append(tic_step - start)
 
@@ -502,7 +442,7 @@ def run(args, device, data, global_stime=0):
             # The nodes for output lies at the RHS side of the last block.
 
             # Load the input features as well as output labels
-            batch_inputs = blocks[0].srcdata['features']
+            batch_inputs = blocks[0].srcdata['feat']
             copy_time = time.time()
             feat_copy_t.append(copy_time - tic_step)
 
@@ -534,114 +474,76 @@ def run(args, device, data, global_stime=0):
                     np.sum(sample_t[-args.log_every:]), np.sum(feat_copy_t[-args.log_every:]), np.sum(forward_t[-args.log_every:]),
                     np.sum(backward_t[-args.log_every:]), np.sum(update_t[-args.log_every:])))
             start = time.time()
-            if args.interrupt_epoch >=0:
-                break
+
         print('[{}]Epoch Time(s): {:.4f}, sample: {:.4f}, data copy: {:.4f}, forward: {:.4f}, backward: {:.4f}, update: {:.4f}, #seeds: {}, #inputs: {}'.format(
             g.rank(), np.sum(step_time), np.sum(sample_t), np.sum(feat_copy_t), np.sum(forward_t), np.sum(backward_t), np.sum(update_t), num_seeds, num_inputs))
-        epoch += 1
-        if g.rank() ==0 and args.interrupt_epoch >=0:
+        if g.rank() ==0 and args.interrupt_epoch >0:
             torch.save([model.state_dict(), epoch], args.checkpoint)
-        if epoch <= args.interrupt_epoch and g.rank() ==0:
+        if epoch < args.interrupt_epoch and g.rank() ==0:
             sys.exit(137)
-    print(g.rank(), "Training time ", time.time()-stime)
+
     # evaluate the embedding using LogisticRegression
-    # print("Generate embedding")
-    # start=time.time()
     if args.standalone:
-        pred, labels = generate_emb(model,g, g.ndata['features'], args.batch_size_eval, device)
+        pred = generate_emb(model,g, g.ndata['feat'], args.batch_size_eval, device)
     else:
-        pred, labels = generate_emb(model.module, g, g.ndata['features'], args.batch_size_eval, device)
-    # print("Take ", time.time()-start)
+        pred = generate_emb(model.module, g, g.ndata['feat'], args.batch_size_eval, device)
     if g.rank() == 0:
-        start=time.time()
-        print("Convert to numpy")
-        if args.out_npz or args.eval:
-            pred = pred[np.arange(labels.shape[0])].cpu().numpy()
-            labels = labels[np.arange(labels.shape[0])].cpu().numpy()
-            if global_train_nid is not None:
-                global_train_nid = global_train_nid.cpu().numpy()
-                global_val_nid = global_valid_nid.cpu().numpy()
-                global_test_nid = global_test_nid.cpu().numpy()
-        print("Generate Embedding Take ", time.time()-start)
-        start=time.time()
-        print("Save output")
-        if args.out_npz is not None: 
-            if global_train_nid is not None:
-                np.savez(args.out_npz, 
-                    trainX = pred[global_train_nid],
-                    valX=pred[global_valid_nid],
-                    testX=pred[global_test_nid],
-                    trainY = labels[global_train_nid],
-                    valY=labels[global_valid_nid],
-                    testY=labels[global_test_nid])
-            else:
-                np.savez(args.out_npz, emb=pred,labels=labels)
-        print("Save embedding take ", time.time()-start)
-        start=time.time()
-        print("Evaluate")
-        if args.eval:
+        if not args.eval:
+            if args.out_npz is not None:
+                pred = pred[np.arange(labels.shape[0])].cpu().numpy()
+                labels = labels.cpu().numpy()
+                if global_train_nid is not None:
+                    global_train_nid = global_train_nid.cpu().numpy()
+                    global_val_nid = global_valid_nid.cpu().numpy()
+                    global_test_nid = global_test_nid.cpu().numpy()
+                    np.savez(args.out_npz, emb=pred, train_ids=global_train_nid, val_ids=global_val_nid, test_ids=global_test_nid,labels=labels)
+                else:
+                    np.savez(args.out_npz, emb=pred,labels=labels)
+        else:
             eval_acc, test_acc = compute_acc(pred, labels, global_train_nid, global_valid_nid, global_test_nid, g.rank())
             print('eval acc {:.4f}; test acc {:.4f}'.format(eval_acc, test_acc))
-        print("Take ", time.time()-start)
         print("training time: ", time.time()-stime)
     if not args.standalone:
         th.distributed.barrier()
         g._client.barrier()
 
 def main(args):
-    stime=time.time()
-    dgl.distributed.initialize(args.ip_config)
+    stime = time.time()
+    dgl.distributed.initialize(args.ip_config, args.num_servers, num_workers=args.num_workers)
     if not args.standalone:
         th.distributed.init_process_group(backend='gloo')
     g = dgl.distributed.DistGraph(args.graph_name, part_config=args.part_config)
     print('rank:', g.rank())
     print('number of edges', g.number_of_edges())
 
-    global_train_nid = th.LongTensor(np.nonzero(g.ndata['train_mask'][np.arange(g.number_of_nodes())]))
-    global_valid_nid = th.LongTensor(np.nonzero(g.ndata['val_mask'][np.arange(g.number_of_nodes())]))
-    global_test_nid = th.LongTensor(np.nonzero(g.ndata['test_mask'][np.arange(g.number_of_nodes())]))
-    labels = g.ndata['labels'][np.arange(g.number_of_nodes())]
-    if args.train_label_only:
-        train_nids = dgl.distributed.node_split(g.ndata['train_mask'], g.get_partition_book(), force_even=True)
-        srcs, dsts = g.find_edges(np.arange(g.number_of_edges()))
-        train_edges = (g.ndata['train_mask'][srcs] + g.ndata['train_mask'][dsts]).type(th.bool)
-        if args.max_edges == -1:
-            train_eids = dgl.distributed.edge_split(train_edges, g.get_partition_book(), force_even=True)
-            print("N train edges:",train_edges.float().sum().item())
-        else:
-            n_curr_train = train_edges.float().sum().item()
-            if args.max_edges >= n_curr_train:
-                train_eids = dgl.distributed.edge_split(train_edges, g.get_partition_book(), force_even=True)
-                print("N train edges:",n_curr_train)
-            else:
-                random_probs = th.rand(g.number_of_edges())
-                random_probs = (random_probs < args.max_edges / n_curr_train)
-                train_edges = th.logical_and(train_edges, random_probs)
-                train_eids = dgl.distributed.edge_split(train_edges, g.get_partition_book(), force_even=True)
-                print("N train edges:",train_edges.float().sum().item())
+    train_eids = dgl.distributed.edge_split(th.ones((g.number_of_edges(),), dtype=th.bool), g.get_partition_book(), force_even=True)
+    train_nids = dgl.distributed.node_split(th.ones((g.number_of_nodes(),), dtype=th.bool), g.get_partition_book())
+    if 'train_mask' in g.ndata:
+        global_train_nid = th.LongTensor(np.nonzero(g.ndata['train_mask'][np.arange(g.number_of_nodes())]))
+        global_train_nid = global_train_nid.squeeze()
+        print("number of train {}".format(global_train_nid.shape[0]))
     else:
-        train_nids = dgl.distributed.node_split(th.ones((g.number_of_nodes(),), dtype=th.bool), g.get_partition_book())
-        if args.max_edges == -1:
-            train_eids = dgl.distributed.edge_split(th.ones((g.number_of_edges(),), dtype=th.bool), g.get_partition_book(), force_even=True)
-            print("N train edges:",g.number_of_edges())
-        else:
-            random_probs = th.rand(g.number_of_edges())
-            random_probs = (random_probs < args.max_edges / g.number_of_edges())
-            train_eids = dgl.distributed.edge_split(random_probs, g.get_partition_book(), force_even=True)
-            print("N train edges:",random_probs.float().sum())
+        global_train_nid = None 
+    if 'val_mask' in g.ndata:
+        global_valid_nid = th.LongTensor(np.nonzero(g.ndata['val_mask'][np.arange(g.number_of_nodes())]))
+        global_valid_nid = global_valid_nid.squeeze()
+        print("number of valid {}".format(global_valid_nid.shape[0]))
+    else:
+        global_valid_nid = None 
+    if 'test_mask' in g.ndata:
+        global_test_nid = th.LongTensor(np.nonzero(g.ndata['test_mask'][np.arange(g.number_of_nodes())]))
+        global_test_nid = global_test_nid.squeeze()
+        print("number of test {}".format(global_test_nid.shape[0]))
+    else:
+        global_test_nid = None 
+    labels = g.ndata['labels'][np.arange(g.number_of_nodes())]
     if args.num_gpus == -1:
         device = th.device('cpu')
     else:
         device = th.device('cuda:'+str(g.rank() % args.num_gpus))
 
     # Pack data
-    in_feats = g.ndata['features'].shape[1]
-    global_train_nid = global_train_nid.squeeze()
-    global_valid_nid = global_valid_nid.squeeze()
-    global_test_nid = global_test_nid.squeeze()
-    print("number of train {}".format(global_train_nid.shape[0]))
-    print("number of valid {}".format(global_valid_nid.shape[0]))
-    print("number of test {}".format(global_test_nid.shape[0]))
+    in_feats = g.ndata['feat'].shape[1]
     data = train_eids, train_nids, in_feats, g, global_train_nid, global_valid_nid, global_test_nid, labels
     run(args, device, data, stime)
     print("parent ends")
@@ -651,13 +553,11 @@ if __name__ == '__main__':
     register_data_args(parser)
     parser.add_argument('--graph_name', type=str, help='graph name')
     parser.add_argument('--out_npz', type=str, help='save file')
-    parser.add_argument('--eval', default=False, action='store_true')
     parser.add_argument('--id', type=int, help='the partition id')
     parser.add_argument('--ip_config', type=str, help='The file for IP configuration')
     parser.add_argument('--part_config', type=str, help='The path to the partition config file')
+    parser.add_argument('--num_servers', type=int, default=1, help='Server count on each machine.')
     parser.add_argument('--n_classes', type=int, help='the number of classes')
-    parser.add_argument('--train_label_only', default=False, action='store_true')
-    parser.add_argument('--max_edges', type=int, default=-1)
     parser.add_argument('--num_gpus', type=int, default=-1, 
                         help="the number of GPU device. Use -1 for CPU training")
     parser.add_argument('--random_walk',action='store_true')
@@ -674,16 +574,26 @@ if __name__ == '__main__':
     parser.add_argument('--eval_every', type=int, default=5)
     parser.add_argument('--lr', type=float, default=0.003)
     parser.add_argument('--dropout', type=float, default=0.5)
+    parser.add_argument('--num_workers', type=int, default=0,
+        help="Number of sampling processes. Use 0 for no extra process.")
     parser.add_argument('--local_rank', type=int, help='get rank of the process')
     parser.add_argument('--standalone', action='store_true', help='run in the standalone mode')
     parser.add_argument('--num_negs', type=int, default=1)
     parser.add_argument('--neg_share', default=False, action='store_true',
         help="sharing neg nodes for positive nodes")
+    parser.add_argument('--interrupt_epoch', type=int, default=-1)
+    parser.add_argument('--checkpoint',default='')
     parser.add_argument('--remove_edge', default=False, action='store_true',
         help="whether to remove edges during sampling")
-    parser.add_argument('--interrupt_epoch', type=int, default=-1)
-    parser.add_argument('--checkpoint',default='ckpt.pt')
+    parser.add_argument('--eval', default=False, action='store_true',
+        help="whether to eval immediately")
+    parser.add_argument('--test_recover', default=False, action='store_true',
+        help="whether to test recover ability, if test not run training at all")
     args = parser.parse_args()
+    assert args.num_workers == int(os.environ.get('DGL_NUM_SAMPLER')), \
+    'The num_workers should be the same value with DGL_NUM_SAMPLER.'
+    assert args.num_servers == int(os.environ.get('DGL_NUM_SERVER')), \
+    'The num_servers should be the same value with DGL_NUM_SERVER.'
     
     print(args)
     main(args)
